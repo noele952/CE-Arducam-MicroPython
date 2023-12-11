@@ -1,5 +1,6 @@
 from machine import Pin, SPI, reset
 import utime
+from utime import sleep_ms
 
 ############### HIGH LEVEL FUNCTIONS #################
 
