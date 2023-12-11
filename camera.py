@@ -1,30 +1,9 @@
-# Arducam port to Pico
-
 from machine import Pin, SPI, reset
-
-
-
-# Developing on 1.19
-'''
-#################### PINOUT ###############
-Camera pin - Pico Pin
-VCC - 3V3
-GND - GND
-SCK - GP18
-MISO - RX - GP16
-MOSI - TX - GP19
-CS - GP17
-'''
-
-from utime import sleep_ms
 import utime
-
-import uos
-import ujson
 
 ############### HIGH LEVEL FUNCTIONS #################
 
-class camera:
+class Camera:
     # Required imports
     
     # Register definitions
@@ -143,15 +122,12 @@ class camera:
     
     WHITE_BALANCE_WAIT_TIME_MS = 500
     
-    FILE_MANAGER_LOG_NAME = 'filemanager.log'
-    
     ##################### Callable FUNCTIONS #####################
-        
-    def __init__(self, spi_bus, cs, filemanager=True):
-        self.cs = cs
+    
+    def __init__(self, spi_bus, cs):
         self.spi_bus = spi_bus
-        self.filemanager_enabled = filemanager
-
+        self.cs = cs
+        
         self._write_reg(self.CAM_REG_SENSOR_RESET, self.CAM_SENSOR_RESET_ENABLE) # Reset camera
         self._wait_idle()
         self.get_sensor_config() # Get camera sensor information
@@ -171,109 +147,99 @@ class camera:
         self.start_time = utime.ticks_ms()
         
         print('camera init')
-    '''
-    Issue warning if the filepath doesnt end in .jpg (Blank) and append
-    Issue error if the filetype is NOT .jpg
-    '''
+   
+   
     def capture_jpg(self):
-        
         if utime.ticks_diff(utime.ticks_ms(), self.start_time) >= self.WHITE_BALANCE_WAIT_TIME_MS:
-        
-        
+            
             # TODO: CLASSES CALL THE FUNCTION TO UPDATE NEW PIXEL FORMAT AND MODE
             new_pixel_format = 0x00
-            new_resolution = self.RESOLUTION_320X240
+            new_resolution = self.RESOLUTION_1280X720
             
             print('Starting capture JPG')
             # JPG, bmp ect
             # TODO: PROPERTIES TO CONFIGURE THE PIXEL FORMAT
             if new_pixel_format != self.pixel_format:
-                self._write_reg(self.CAM_REG_FORMAT, self.pixel_format) # Set to capture a jpg
+                self._write_reg(self.CAM_REG_FORMAT, self.pixel_format)
                 self._wait_idle()
-            
+                
                 # TODO: PROPERTIES TO CONFIGURE THE RESOLUTION
             if new_resolution != self.mode:
                 self._write_reg(self.CAM_REG_CAPTURE_RESOLUTION, new_resolution)
                 print('setting res', new_resolution)
                 self._wait_idle()
-            
-            # Start capturing the photo
+      
+            # Start capturing the photo  
             self._set_capture()
             print('capture jpg complete')
         else:
             print('Please add a ', self.WHITE_BALANCE_WAIT_TIME_MS, ' delay to allow for white balance to run')
+    
     
     # TODO: After reading the camera data clear the FIFO and reset the camera (so that the first time read can be used)
     def saveJPG(self,filename):
         headflag = 0
         print('starting saving')
         print('rec len:', self.received_length)
-        
         image_data = 0x00
         image_data_next = 0x00
-        
         image_data_int = 0x00
         image_data_next_int = 0x00
-        if self.filemanager_enabled:
-            filename = self.filemanager(filename)
-        
         while(self.received_length):
-            
             image_data = image_data_next
             image_data_int = image_data_next_int
-            
             image_data_next = self._read_byte()
             image_data_next_int = int.from_bytes(image_data_next, 1) # TODO: CHANGE TO READ n BYTES
             if headflag == 1:
+                print(image_data_next)
                 jpg_to_write.write(image_data_next)
-            
+
             if (image_data_int == 0xff) and (image_data_next_int == 0xd8):
-                # TODO: Save file to filename
                 print('start of file')
                 headflag = 1
                 jpg_to_write = open(filename,'ab')
+                print(image_data)
                 jpg_to_write.write(image_data)
+                print(image_data_next)                                   
                 jpg_to_write.write(image_data_next)
-                
+              
             if (image_data_int == 0xff) and (image_data_next_int == 0xd9):
                 print('TODO: Save and close file?')
                 headflag = 0
+                print(image_data_next)
                 jpg_to_write.write(image_data_next)
                 jpg_to_write.close()
-    
-    '''
-    Start this alongside the camera module to save photos in a folder with a filename i.e. image-<counter>.jpg
-    * appends '_' after a word, the next number and the file format
-    '''
-    def filemanager(self,filename):
+          
+          
+    def generateJPG(self, chunk_size=256):
+        # Returns the camera buffer data as a generator, allowing you to process it in pieces
+        print('starting generator')
+        print('rec len:', self.received_length)
+        image_data = bytearray()
         
-        '''
-        image_<count>.jpg=3
-        bird_<count>=3
-        =
-        {'image': 3,
-         'bird': 3}
-        '''
-        count = 0
-        files = {}
-        # Ensure file is present
-        if self.FILE_MANAGER_LOG_NAME not in uos.listdir():
-            with open(self.FILE_MANAGER_LOG_NAME, 'w') as f:
-                f.write(ujson.dumps({}))
-            
-        # Check if the filename already exists in the storage
-        with open(self.FILE_MANAGER_LOG_NAME, 'r') as f:
-            files = ujson.loads(f.read())
-            if filename in files:
-                count = files[filename] + 1
-            files[filename] = count
-            
-        # Save the updated list back to the storage
-        with open(self.FILE_MANAGER_LOG_NAME, 'w') as f:
-            f.write(ujson.dumps(files))
-            
-        new_filename = f"{filename}_{count}.jpg" if count > 0 else f"{filename}.jpg"
-        return new_filename
+        while self.received_length:
+            image_data.extend(self._read_byte())
+
+            # Check if the chunk is all \x00
+            if all(byte == 0x00 for byte in image_data):
+                break  # Stop generating if all \x00
+
+            while len(image_data) >= chunk_size:
+                yield bytes(image_data[:chunk_size])
+                image_data = image_data[chunk_size:]
+
+            if len(image_data) >= 2 and int.from_bytes(image_data[-2:], 'big') == 0xFFD9:
+                print('TODO: Save and close file?')
+                yield bytes(image_data)
+                image_data = bytearray() 
+        # Check if the last chunk is all \x00 and exclude it
+        if all(byte == 0x00 for byte in image_data):
+            image_data = bytearray()
+        # Yield the remaining data if any
+        if image_data:
+            yield bytes(image_data)
+
+        
 
     def get_sensor_config(self):
         camera_id = self._read_reg(self.CAM_REG_SENSOR_ID);
@@ -282,8 +248,8 @@ class camera:
             self.camera_idx = '3MP'
         if (int.from_bytes(camera_id, 1) == self.SENSOR_5MP_1) or (int.from_bytes(camera_id, 1) == self.SENSOR_5MP_2):
             self.camera_idx = '5MP'
-    
-    ##################### LOW LEVEL FUNCTIONS #####################
+        
+    ##################### LOW LEVEL FUNCTIONS #####################   
         
     def _bus_write(self, addr, val):
         self.cs.off()
@@ -309,6 +275,7 @@ class camera:
         return data # TODO: Check that this should return raw bytes or int (int.from_bytes(data, 1))
 
     ##################### Wrapper FUNCTIONS #####################
+
 
     def _read_byte(self):
         self.cs.off()
@@ -374,61 +341,3 @@ class camera:
         self.white_balance_mode = register_value
         self._write_reg(self.CAM_REG_WB_MODE_CONTROL, register_value)
         self._wait_idle()
-        
-
-
-
-################################################################## CODE ACTUAL ##################################################################
-spi = SPI(0,sck=Pin(18), miso=Pin(16), mosi=Pin(19))
-cs = Pin(17, Pin.OUT)
-
-# button = Pin(15, Pin.IN,Pin.PULL_UP)
-onboard_LED = Pin(25, Pin.OUT)
-
-cam = camera(spi, cs)
-
-sleep_ms(1000)
-
-# print('starting loop')
-# onboard_LED.on()
-# #cam.set_white_balance('office')
-# cam.capture_jpg()
-# print('took photo')
-# sleep_ms(1000)
-# cam.saveJPG('image')
-
-for i in range(2):
-    onboard_LED.on()
-    cam.capture_jpg()
-    sleep_ms(200)
-    cam.saveJPG('image')
-    onboard_LED.off()
-    sleep_ms(2000)
-
-# photo_counter += 1
-#nboard_LED.off()
-
-
-#################################################################################################################################################
-
-
-# Initialise camera - 
-# cam = LIBRARY.camera(spi, cs)
-
-# Set parameters
-# cam.brightness = OPTIONS
-# cam.resolution = OPTIONS
-# cam.effects = OPTIONS
-# ECT...
-
-# Get parameters
-# cam.getModel
-
-
-# Take photo
-# cam.capture_jpg("/path/to/image.jpg")
-'''
-Append filename with warning if '.jpg' is not included
-'''
-
-
