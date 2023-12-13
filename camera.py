@@ -192,22 +192,18 @@ class Camera:
             image_data_next = self._read_byte()
             image_data_next_int = int.from_bytes(image_data_next, 1) # TODO: CHANGE TO READ n BYTES
             if headflag == 1:
-                print(image_data_next)
                 jpg_to_write.write(image_data_next)
 
             if (image_data_int == 0xff) and (image_data_next_int == 0xd8):
                 print('start of file')
                 headflag = 1
                 jpg_to_write = open(filename,'ab')
-                print(image_data)
-                jpg_to_write.write(image_data)
-                print(image_data_next)                                   
+                jpg_to_write.write(image_data)                                   
                 jpg_to_write.write(image_data_next)
               
             if (image_data_int == 0xff) and (image_data_next_int == 0xd9):
                 print('TODO: Save and close file?')
                 headflag = 0
-                print(image_data_next)
                 jpg_to_write.write(image_data_next)
                 jpg_to_write.close()
           
